@@ -1,0 +1,6 @@
+{
+  "name": "CrowdFlow Guardian AI",
+  "description": "Autonomous crowd management and emergency response agent for cricket stadiums.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

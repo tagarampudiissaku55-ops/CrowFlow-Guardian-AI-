@@ -1,0 +1,110 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Global Safety Net - Catch-all default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // Standard primitive validation helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    
+    function incoming() {
+      return request.resource.data;
+    }
+    
+    function existing() {
+      return resource.data;
+    }
+    
+    // Section 2: Validation Blueprints (Anti-Update-Gaps)
+    function isValidIncident(data) {
+      return data.keys().hasAll(['id', 'type', 'severity', 'zone', 'description', 'createdAt', 'authorId'])
+          && data.keys().size() == 7
+          && isValidId(data.id)
+          && data.type is string && data.type.size() <= 64
+          && (data.severity == 'Low' || data.severity == 'Medium' || data.severity == 'High')
+          && data.zone is string && data.zone.size() <= 64
+          && data.description is string && data.description.size() <= 300
+          && data.createdAt == request.time
+          && data.authorId == request.auth.uid;
+    }
+    
+    function isValidSafetyReport(data) {
+      return data.keys().hasAll(['id', 'riskLevel', 'dangerZones', 'aiRecommendations', 'emergencyActions', 'predictedOutcome', 'generatedAt', 'creatorId'])
+          && data.keys().size() == 8
+          && isValidId(data.id)
+          && (data.riskLevel == 'SAFE' || data.riskLevel == 'MODERATE' || data.riskLevel == 'HIGH' || data.riskLevel == 'CRITICAL')
+          && data.dangerZones is list && data.dangerZones.size() <= 20
+          && data.aiRecommendations is list && data.aiRecommendations.size() <= 25
+          && data.emergencyActions is list && data.emergencyActions.size() <= 25
+          && data.predictedOutcome is string && data.predictedOutcome.size() <= 500
+          && data.generatedAt == request.time
+          && data.creatorId == request.auth.uid;
+    }
+    
+    function isValidPreset(data) {
+      return data.keys().hasAll(['id', 'name', 'description', 'weather', 'matchPhase', 'gates', 'zones', 'securityStaff', 'creatorId', 'createdAt'])
+          && data.keys().size() == 10
+          && isValidId(data.id)
+          && data.name is string && data.name.size() <= 64
+          && data.description is string && data.description.size() <= 300
+          && (data.weather == 'Sunny' || data.weather == 'Rainy' || data.weather == 'Thunderstorm' || data.weather == 'Extreme Heat')
+          && (data.matchPhase == 'Pre-Match (Arrivals)' || data.matchPhase == 'In-Progress (Early Overs)' || data.matchPhase == 'Mid-Innings Break' || data.matchPhase == 'In-Progress (Death Overs)' || data.matchPhase == 'Post-Match (Egress)')
+          && data.gates is list && data.gates.size() <= 8
+          && data.zones is list && data.zones.size() <= 6
+          && data.securityStaff is number && data.securityStaff >= 50 && data.securityStaff <= 500
+          && data.creatorId == request.auth.uid
+          && data.createdAt == request.time;
+    }
+    
+    // Match Rules for Incidents
+    match /incidents/{incidentId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && isValidId(incidentId);
+      allow create: if isEmailVerified() && isValidId(incidentId) && incidentId == incoming().id && isValidIncident(incoming());
+      
+      // Tiered Identity logic: Author only can update non-immutable attributes. Immutability checked
+      allow update: if isEmailVerified() && isValidId(incidentId) && incidentId == incoming().id && isValidIncident(incoming()) && (
+        incoming().authorId == existing().authorId &&
+        incoming().createdAt == existing().createdAt
+      );
+      
+      allow delete: if isEmailVerified() && existing().authorId == request.auth.uid;
+    }
+    
+    // Match Rules for Safety Reports
+    match /safetyReports/{reportId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && isValidId(reportId);
+      allow create: if isEmailVerified() && isValidId(reportId) && reportId == incoming().id && isValidSafetyReport(incoming());
+      
+      // Reports are absolute auditing logs: updates and deletions are entirely blocked
+      allow update, delete: if false;
+    }
+    
+    // Match Rules for Saved Simulation Presets
+    match /savedPresets/{presetId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && isValidId(presetId);
+      allow create: if isEmailVerified() && isValidId(presetId) && presetId == incoming().id && isValidPreset(incoming());
+      
+      allow update: if isEmailVerified() && isValidId(presetId) && presetId == incoming().id && isValidPreset(incoming()) && (
+        incoming().creatorId == existing().creatorId &&
+        incoming().createdAt == existing().createdAt
+      );
+      allow delete: if isEmailVerified() && existing().creatorId == request.auth.uid;
+    }
+  }
+}
